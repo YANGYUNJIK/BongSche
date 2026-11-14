@@ -46,9 +46,9 @@ function goResult(el){
 }
 
 /* ───── 붙여넣어 입력 ───── */
-G.openPaste=function(){
+G.openPaste=function(text){
   const ty=UI.lastPasteType||'out';
-  UI.PP={stage:'input',type:ty,cat:OTHER[ty],text:'',rows:[]};
+  UI.PP={stage:'input',type:ty,cat:OTHER[ty],text:typeof text==='string'?text:'',rows:[]};
   G.layerOpen(pasteHTML());
 };
 const catOpts=(ty,sel)=>CATS[ty].map(c=>'<option value="'+esc(c.id)+'"'+(c.id===sel?' selected':'')+'>'+esc(c.name)+'</option>').join('');

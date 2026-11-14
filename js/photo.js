@@ -77,10 +77,34 @@ const Photo={
     return items;
   },
 
-  async analyze(file,today){
-    const img=await this.resize(file),key=this.getKey();
-    if(!key) return {mock:true,thumb:img.dataUrl,items:this.mockItems(today)};
-    const cats=this.catNames();
+  /* 키가 있으면 AI로(정확), 없거나 AI가 안 되면 폰 안에서 글자를 읽어요(키 없이) */
+  async analyze(file,today,progress){
+    let note='';
+    if(this.getKey()){
+      try{const r=await this.analyzeAI(file,today);return r}
+      catch(e){
+        if(/키가 올바르지|사용할 수 없어요|모델 이름/.test(e.message)) throw e;   // 키·모델 문제는 그대로 알려 줘요
+        note='AI 분석을 쓸 수 없어서(' +e.message+ ') 폰 안에서 글자를 읽었어요.';
+      }
+    }
+    return this.analyzeOcr(file,today,progress,note);
+  },
+  async analyzeOcr(file,today,progress,note){
+    let r;
+    Ocr.onLog=m=>{
+      if(!progress) return;
+      if(m.status==='recognizing text') progress('사진 읽는 중 '+Math.round((m.progress||0)*100)+'%');
+      else if(/loading|initializ/.test(m.status||'')) progress('글자 인식 준비 중이에요 (처음 한 번은 오래 걸려요)');
+    };
+    try{r=await Ocr.read(file)}
+    catch(e){
+      if(window.__PREVIEW__){const img=await this.resize(file);return {mode:'mock',thumb:img.dataUrl,items:this.mockItems(today),text:'',note:''}}
+      throw new Error(e&&e.message?e.message:'사진을 읽지 못했어요');
+    }
+    return {mode:'ocr',thumb:r.thumb,text:r.text,items:Ocr.parse(r.text,today,this.catNames()),note:note||''};
+  },
+  async analyzeAI(file,today){
+    const img=await this.resize(file),key=this.getKey(),cats=this.catNames();
     let res;
     try{
       res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -92,12 +116,12 @@ const Photo={
       });
     }catch(e){throw new Error('인터넷에 연결되지 않았어요')}
     if(!res.ok){
-      const why={401:'API 키가 올바르지 않아요',403:'이 API 키로는 사용할 수 없어요',404:'모델 이름을 찾을 수 없어요(더보기 → 사진 분석에서 확인)',429:'사용 한도에 걸렸어요. 잠시 뒤에 다시 해 보세요',413:'사진이 너무 커요'}[res.status];
-      throw new Error(why||'사진 분석에 실패했어요 ('+res.status+')');
+      const why={401:'API 키가 올바르지 않아요',403:'이 API 키로는 사용할 수 없어요',404:'모델 이름을 찾을 수 없어요(더보기 → 사진 분석에서 확인)',429:'사용 한도에 걸렸어요',413:'사진이 너무 커요'}[res.status];
+      throw new Error(why||'AI 분석에 실패했어요 ('+res.status+')');
     }
     let data;try{data=await res.json()}catch(e){throw new Error('분석 결과를 읽지 못했어요')}
     const text=(Array.isArray(data.content)?data.content:[]).filter(b=>b&&b.type==='text').map(b=>b.text).join('\n');
-    return {mock:false,thumb:img.dataUrl,items:this.parseItems(text,today,cats)};
+    return {mode:'ai',thumb:img.dataUrl,text:'',items:this.parseItems(text,today,cats),note:''};
   },
   /* 키가 없을 때 화면을 확인하기 위한 예시: 실제로 사진을 읽지 않아요 */
   mockItems(today){

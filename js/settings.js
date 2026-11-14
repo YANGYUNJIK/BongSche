@@ -227,12 +227,14 @@ function fxSave(){
 /* ───── 사진 분석 (API 키) ───── */
 G.subs.photo={title:'사진 분석',html:function(){
   const k=Photo.getKey();
-  return '<p class="sub" style="margin:0 2px 8px">사진을 찍으면 날짜, 내용, 금액, 분류를 읽어 줘요. 읽는 일은 Anthropic(Claude)에 맡겨요. 그래서 <b>API 키</b>가 필요하고, 사진은 분석할 때만 Anthropic으로 전송돼요. 이 앱은 사진을 저장하지 않아요.</p>'+
-    '<section class="card"><div class="ln"><span>상태</span><span class="l"></span><b>'+(k?'키 저장됨 (…'+esc(k.slice(-4))+')':'키 없음 — 예시 결과만 나와요')+'</b></div>'+
+  return '<p class="sub" style="margin:0 2px 8px">사진을 찍으면 날짜, 내용, 금액, 분류를 읽고 수입인지 지출인지도 골라 줘요(영수증, 카드 문자 캡처, 입금 내역, 급여명세서).</p>'+
+    '<section class="card"><h2 class="sec" style="margin:0 0 4px">기본: 폰 안에서 읽기</h2><div class="sub">키도 인터넷도 필요 없어요(처음 한 번만 글자 인식 파일 약 9MB를 받아요). 사진은 폰 밖으로 나가지 않아요. 흐리거나 비뚤어진 사진은 글자를 잘못 읽을 수 있으니, 등록 전에 날짜와 금액을 꼭 확인하세요.</div></section>'+
+    '<section class="card"><h2 class="sec" style="margin:0 0 4px">선택: API 키로 더 정확하게</h2><div class="sub" style="margin-bottom:6px">Anthropic(Claude)에 사진을 보내서 읽어요. 키가 있으면 이 방법을 먼저 쓰고, 안 되면 폰 안에서 읽어요.</div>'+
+    '<div class="ln"><span>상태</span><span class="l"></span><b>'+(k?'키 저장됨 (…'+esc(k.slice(-4))+')':'키 없음 — 폰 안에서 읽어요')+'</b></div>'+
     '<div class="fld"><label for="ph-key">API 키 (sk-ant-…)</label><input id="ph-key" class="inp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="'+(k?'새 키로 바꾸려면 여기에 붙여넣기':'붙여넣기')+'"></div>'+
     '<div class="fld"><label for="ph-model">모델 (비워 두면 기본값 '+esc(Photo.DEFAULT_MODEL)+')</label><input id="ph-model" class="inp" autocapitalize="off" spellcheck="false" value="'+esc(Photo.getModel())+'"></div>'+
-    '<div class="row-flex" style="gap:8px"><button type="button" class="btn fill" data-phkeysave>저장</button>'+(k?'<button type="button" class="btn danger" data-phkeydel>키 지우기</button>':'')+'</div></section>'+
-    '<p class="sub" style="margin:10px 2px">키는 <b>이 폰에만</b> 저장돼요(J와 Y가 같이 써요). Anthropic 콘솔(console.anthropic.com)에서 키를 만들고, <b>월 사용 한도</b>를 꼭 정해 두세요. 사진 한 장에 드는 돈은 아주 적어요. 폰을 잃어버리면 콘솔에서 그 키를 지우세요.</p>';
+    '<div class="row-flex" style="gap:8px"><button type="button" class="btn fill" data-phkeysave>저장</button>'+(k?'<button type="button" class="btn danger" data-phkeydel>키 지우기</button>':'')+'</div>'+
+    '<p class="sub" style="margin:8px 0 0">키는 <b>이 폰에만</b> 저장돼요. Anthropic 콘솔(console.anthropic.com)에서 <b>월 사용 한도</b>를 꼭 정해 두세요. 폰을 잃어버리면 콘솔에서 그 키를 지우세요. AI에는 사진이 전송돼요.</p></section>';
 }};
 
 /* ───── 이벤트 ───── */

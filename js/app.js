@@ -7,7 +7,7 @@ const app=$('#app'),layer=$('#layer'),toastEl=$('#toast');
 const WD=['일','월','화','수','목','금','토'];
 const TL={out:'지출',in:'수입',ded:'공제',save:'저축',fund:'예비',settle:'정산'};
 const HUES=[8,32,58,92,138,168,196,222,250,280,318,348];
-const UI={tab:'home',sv:'stats',filter:'all',fcat:'',fab:false,undo:null,lastC:{},ED:null,PH:null,showSkipped:false,pendOpen:false,sub:'',selMode:false,sel:{},sentinel:false,ignoreUntil:0,cleanTimer:null,QE:null,lp:null,lpFired:0};
+const UI={tab:'home',sv:'stats',filter:'all',fcat:'',fab:false,undo:null,lastC:{},ED:null,PH:null,showSkipped:false,pendOpen:false,sub:'',selMode:false,sel:{},sentinel:false,expectPop:false,expectT:null,cleanTimer:null,QE:null,lp:null,lpFired:0};
 const GApp={hooks:{click:[],input:[],change:[],close:[]},subs:{}};window.GApp=GApp;
 const isCur=(y,m)=>y===NOW.getFullYear()&&m===NOW.getMonth()+1;
 const money=n=>won(n)+'원';
@@ -336,7 +336,10 @@ function histPush(){
 function histRelease(){
   clearTimeout(UI.cleanTimer);
   UI.cleanTimer=setTimeout(()=>{
-    if(UI.sentinel&&!overlayOpen()){UI.sentinel=false;UI.ignoreUntil=Date.now()+600;try{history.back()}catch(e){UI.ignoreUntil=0}}
+    if(UI.sentinel&&!overlayOpen()){
+      UI.sentinel=false;UI.expectPop=true;clearTimeout(UI.expectT);UI.expectT=setTimeout(()=>{UI.expectPop=false},400);   // 내가 한 뒤로 가기 한 번만 건너뛰어요
+      try{history.back()}catch(e){UI.expectPop=false}
+    }
   },250);
 }
 function layerClose(fromPop){
@@ -348,7 +351,7 @@ function layerClose(fromPop){
 function enterSub(name){UI.sub=name;histPush();render()}
 function leaveSub(){UI.sub='';if(layer.className!=='open') histRelease();render()}
 window.addEventListener('popstate',()=>{
-  if(Date.now()<UI.ignoreUntil) return;
+  if(UI.expectPop){UI.expectPop=false;clearTimeout(UI.expectT);return}
   UI.sentinel=false;
   if(layer.className==='open'){layerClose(true);if(UI.sub) histPush();return}
   if(UI.sub){UI.sub='';render(true)}
@@ -516,7 +519,7 @@ function startPhoto(){
 async function onPhoto(file){
   if(!file) return;
   toast('사진을 읽는 중이에요…');
-  try{const r=await Photo.analyze(file,isoToday());openPhotoSheet(r)}
+  try{const r=await Photo.analyze(file,isoToday(),msg=>toast(msg));openPhotoSheet(r)}
   catch(err){toast(err&&err.message?err.message:'사진을 읽지 못했어요')}
 }
 function phRows(items){
@@ -530,15 +533,21 @@ function phRows(items){
   });
 }
 function openPhotoSheet(r){
-  UI.PH={mock:r.mock,thumb:r.thumb,rows:phRows(r.items)};
+  UI.PH={mode:r.mode,note:r.note||'',text:r.text||'',thumb:r.thumb,rows:phRows(r.items)};
   layerOpen(phHTML());
 }
 function phHTML(){
   const p=UI.PH;
   const opts=sel=>['out','in'].map(ty=>'<optgroup label="'+TL[ty]+'">'+CATS[ty].map(c=>'<option value="'+ty+'|'+esc(c.id)+'"'+(sel===ty+'|'+c.id?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</optgroup>').join('');
-  let h='<h2>사진에서 읽은 내역</h2>'+(p.mock?'<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">API 키가 없어서 예시 결과를 보여 줘요. 더보기 → 사진 분석에서 키를 넣으면 실제로 사진을 읽어요.</p>':'<p class="sub">잘못 읽은 곳은 고친 뒤에 등록하세요.</p>');
+  let h='<h2>사진에서 읽은 내역</h2>';
+  if(p.mode==='mock') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">미리보기 화면이라 예시 결과를 보여 줘요. 폰에 설치한 앱에서는 사진을 실제로 읽어요.</p>';
+  else if(p.mode==='ocr') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">폰 안에서 글자를 읽은 결과예요. 글자를 잘못 읽을 수 있으니 <b>날짜와 금액을 꼭 확인</b>하고 고쳐 주세요. (더보기 → 사진 분석에서 API 키를 넣으면 더 정확해요)'+(p.note?'<br>'+esc(p.note):'')+'</p>';
+  else h+='<p class="sub">잘못 읽은 곳은 고친 뒤에 등록하세요.</p>';
   if(p.thumb) h+='<img src="'+p.thumb+'" alt="찍은 사진" style="max-width:100%;max-height:140px;border-radius:8px;border:1px solid var(--rule);display:block;margin:6px 0">';
-  if(!p.rows.length) h+='<p class="empty">읽을 수 있는 내역이 없었어요.</p>';
+  if(!p.rows.length){
+    h+='<p class="empty" style="font-size:20px">읽을 수 있는 내역이 없었어요.<br>사진을 더 가깝고 밝게 찍어 보세요.</p>';
+    if(p.text&&p.text.trim()) h+='<details style="margin:6px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre></details><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button>';
+  }
   p.rows.forEach((r,i)=>{
     h+='<div class="pp" data-pi="'+i+'"><input type="checkbox" class="ph-on"'+(r.on?' checked':'')+' aria-label="등록"><div class="row-flex"><input class="inp ph-d" style="width:62px;min-height:40px;padding:4px 8px" inputmode="numeric" value="'+r.d+'" aria-label="일"><input class="inp ph-n" style="min-height:40px;padding:4px 8px" value="'+esc(r.n)+'" aria-label="내용"></div>'+
       '<input class="inp ph-a num" style="width:108px;min-height:40px;padding:4px 8px;text-align:right" inputmode="numeric" value="'+esc(r.a)+'" aria-label="금액"><select class="ph-k" aria-label="분류">'+opts(r.k)+'</select></div>';
@@ -773,6 +782,7 @@ document.addEventListener('click',e=>{
     }
     if(UI.PH){
       if(c('[data-phsave]')){phSave();return}
+      if(c('[data-phpaste]')){const t=UI.PH.text;layerClose();if(GApp.openPaste) GApp.openPaste(t);return}
     }
     if(UI.QE){
       let b;
