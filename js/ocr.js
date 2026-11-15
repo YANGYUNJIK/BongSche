@@ -239,6 +239,21 @@ const Ocr={
     for(let i=1;i<=m;i++){const cur=[i];for(let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur}
     return prev[n];
   },
+  /* 깨진 숫자(garb)가 값(val)과 맞는지: 길이가 같으면 자리별로, 다르면 보이는 숫자가 순서대로 들어 있는지 봐요 */
+  compat(garb,val){
+    const s=val.toLocaleString('en-US'),g=String(garb);
+    if(g.length===s.length){
+      for(let i=0;i<g.length;i++){
+        if(/\d/.test(g[i])){if(s[i]!==g[i]) return false}
+        else if(g[i]===','){if(s[i]!==',') return false}
+        else if(!/\d/.test(s[i])) return false;
+      }
+      return true;
+    }
+    const vis=g.replace(/\D/g,''),dig=s.replace(/\D/g,'');let j=0;
+    for(let i=0;i<dig.length&&j<vis.length;i++) if(dig[i]===vis[j]) j++;
+    return j===vis.length;
+  },
   isSlip(text){
     const hits=[/급[여며]\s*(?:내역|총액|명세)/,/공제\s*(?:내역|총액)/,/세금\s*(?:내역|총액)/,/실\s*수\s*령/,/본\s*봉/].filter(re=>re.test(text)).length;
     return hits>=2;
@@ -267,6 +282,7 @@ const Ocr={
   RX_DED:/[공곰]\s*제\s*[총흥종]\s*[액엑]/,
   RX_NET:/실\s*수\s*[령형]/,
   DED_ORDER:['일반기여금','건강보험','노인장기요양보험','교직원공제회비','교원연합회비'],
+  IN_ORDER:['본봉','정근수당가산금','정액급식비','교직수당','교직수당가산금','시간외근무수당','교원연구비'],   // 표에서 늘 나오는 순서(이름이 깨졌을 때 추정용)
   parseSlip(lines,cats){
     const AMT=/^-?(?:\d{1,3}(?:,\d{3})+|\d{4,})$/;
     const items=[],tot={gross:0,tax:0,ded:0,net:0,netRead:false};let first=true,lastIncomeTax=0;
@@ -275,49 +291,76 @@ const Ocr={
       const fixed=line.replace(/[|│┃]/g,' ').replace(/(\d)\.(\d{3})(?!\d)/g,'$1,$2').replace(/(\d),\s(\d{3})/g,'$1,$2');
       const toks=fixed.split(/\s+/).filter(Boolean);
       const pairs=[];let nm=[];
-      toks.forEach(t=>{if(AMT.test(t)){pairs.push({name:nm.join(' '),amt:Number(t.replace(/,/g,''))});nm=[]}else nm.push(t)});
+      toks.forEach(t=>{
+        if(AMT.test(t)){pairs.push({name:nm.join(' '),amt:Number(t.replace(/,/g,''))});nm=[]}
+        else if(/^[\d,.?£$|/\\_~°-]+$/.test(t)&&/[?£$|/\\_~°.]/.test(t)&&(t.match(/\d/g)||[]).length>=2&&t.length>=4){pairs.push({name:nm.join(' '),amt:null,garb:t});nm=[]}   // 숫자가 깨진 금액
+        else nm.push(t);
+      });
       const isTotals=pairs.length>=2&&pairs.some(p=>this.RX_GROSS.test(p.name.replace(/\s+/g,''))||this.RX_TAX.test(p.name.replace(/\s+/g,'')));
       if(isTotals){                      // 급여총액 · 세금총액 · 공제총액이 한 줄에 있어요 (이름이 깨져도 순서로 알 수 있어요)
         const g=pairs.find(p=>this.RX_GROSS.test(p.name.replace(/\s+/g,'')));
         const t=pairs.find(p=>this.RX_TAX.test(p.name.replace(/\s+/g,'')));
-        if(g) tot.gross=g.amt;else if(pairs[0]) tot.gross=pairs[0].amt;
-        if(t) tot.tax=t.amt;else if(pairs[1]) tot.tax=pairs[1].amt;
+        if(g) tot.gross=g.amt||0;else if(pairs[0]) tot.gross=pairs[0].amt||0;
+        if(t) tot.tax=t.amt||0;else if(pairs[1]) tot.tax=pairs[1].amt||0;
         const d=pairs.find(p=>this.RX_DED.test(p.name.replace(/\s+/g,'')));
-        if(d) tot.ded=d.amt;else if(pairs[2]) tot.ded=pairs[2].amt;
+        if(d) tot.ded=d.amt||0;else if(pairs[2]) tot.ded=pairs[2].amt||0;
         return;
       }
       pairs.forEach((p,idx)=>{
         const nrm=p.name.replace(/\s+/g,'');
-        if(this.RX_GROSS.test(nrm)){tot.gross=p.amt;return}
-        if(this.RX_TAX.test(nrm)){tot.tax=p.amt;return}
-        if(this.RX_DED.test(nrm)){tot.ded=p.amt;return}
-        if(this.RX_NET.test(nrm)){tot.net=p.amt;tot.netRead=true;return}
+        if(this.RX_GROSS.test(nrm)){tot.gross=p.amt||0;return}
+        if(this.RX_TAX.test(nrm)){tot.tax=p.amt||0;return}
+        if(this.RX_DED.test(nrm)){tot.ded=p.amt||0;return}
+        if(this.RX_NET.test(nrm)){if(p.amt!==null){tot.net=p.amt;tot.netRead=true}return}
         let hit=this.slipName(p.name),kind,name;
         if(hit){kind=hit.kind;name=hit.name}
         else{
           kind=(idx===0)?'in':'ded';
-          if(kind==='in') name=(first?'본봉':(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함'));
+          if(kind==='in') name=first?'본봉':(this.IN_ORDER.find(x=>!seen[x])||(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함'));
           else if(lastIncomeTax&&Math.abs(p.amt-Math.floor(lastIncomeTax/100)*10)<=20&&!seen['지방소득세']) name='지방소득세';        // 지방소득세는 소득세의 10%
+          else if(!seen['지방소득세']&&seen['소득세']&&p.amt!==null&&p.amt<100000) name='지방소득세';      // 소득세 바로 다음 칸의 작은 금액은 지방소득세
           else{const nx=this.DED_ORDER.find(x=>!seen[x]);name=nx||(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함')}
         }
         // 마이너스 금액(연말정산 환급 등)은 같은 종류의 항목에서 빼 줘요
-        if(p.amt<0){
+        if(p.amt!==null&&p.amt<0){
           const host=items.find(i=>i.type==='ded'&&((/건강보험/.test(p.name)&&i.n==='건강보험')||(/장기요양|요양/.test(p.name)&&i.n==='노인장기요양보험')));
           if(host){host.a+=p.amt;host.merged=(host.merged||'')+p.name;return}
           kind='ded';
         }
         first=false;seen[name]=true;
-        if(name==='소득세') lastIncomeTax=p.amt;
-        items.push({date:null,n:name,a:Math.abs(p.amt),type:kind==='in'?'in':'ded',c:this.mapSlipCat(kind,name,cats)});
+        if(name==='소득세'&&p.amt!==null) lastIncomeTax=p.amt;
+        items.push({date:null,n:name,a:p.amt===null?null:Math.abs(p.amt),garb:p.garb||'',type:kind==='in'?'in':'ded',c:this.mapSlipCat(kind,name,cats)});
       });
     });
+    // 숫자가 깨져서 못 읽은 금액은 합계에서 빼서 복구해요 (보이는 숫자와 맞을 때만)
+    const repaired=[];
+    ['in','ded'].forEach(kind=>{
+      const grp=items.filter(i=>i.type===kind),unk=grp.filter(i=>i.a===null),total=kind==='in'?tot.gross:(tot.tax+tot.ded);
+      if(unk.length===1&&total){
+        const val=total-grp.reduce((s,i)=>s+(i.a||0),0);
+        if(val>0&&this.compat(unk[0].garb,val)){unk[0].a=val;repaired.push(unk[0].n+' '+val.toLocaleString('ko-KR')+'원')}
+      }
+    });
+    // 소득세와 다른 항목이 함께 깨졌으면: 지방소득세가 소득세의 10%라는 관계로 소득세 범위를 줄여서 풀어요
+    {
+      const dg=items.filter(i=>i.type==='ded'),u2=dg.filter(i=>i.a===null),total=tot.tax+tot.ded;
+      const inc=u2.find(i=>i.n==='소득세'),loc=dg.find(i=>i.n==='지방소득세'&&i.a);
+      if(u2.length===2&&inc&&loc&&total){
+        const oth=u2.find(i=>i!==inc),known=dg.reduce((s,i)=>s+(i.a||0),0),sols=[];
+        for(let v=loc.a*10;v<=loc.a*10+99;v++){const w=total-known-v;if(w>0&&this.compat(inc.garb,v)&&this.compat(oth.garb,w)) sols.push([v,w])}
+        if(sols.length===1){inc.a=sols[0][0];oth.a=sols[0][1];repaired.push(inc.n+' '+inc.a.toLocaleString('ko-KR')+'원',oth.n+' '+oth.a.toLocaleString('ko-KR')+'원')}
+      }
+    }
+    const unreadable=items.filter(i=>i.a===null).map(i=>i.n);
+    items.forEach(i=>{if(i.a===null) i.a=0});
     if(!tot.netRead&&tot.gross&&(tot.tax||tot.ded)) tot.net=tot.gross-tot.tax-tot.ded;       // 실수령액을 못 읽었으면 계산해요
     const sumIn=items.filter(i=>i.type==='in').reduce((s,i)=>s+i.a,0),sumDed=items.filter(i=>i.type==='ded').reduce((s,i)=>s+i.a,0);
     const fmt=n=>n.toLocaleString('ko-KR')+'원',warns=[];
     if(tot.gross&&sumIn!==tot.gross) warns.push('급여 항목을 더하면 '+fmt(sumIn)+'인데 급여총액은 '+fmt(tot.gross)+'이에요');
     if((tot.tax||tot.ded)&&sumDed!==tot.tax+tot.ded) warns.push('세금·공제 항목을 더하면 '+fmt(sumDed)+'인데 총액은 '+fmt(tot.tax+tot.ded)+'이에요');
     if(tot.netRead&&tot.gross&&tot.gross-(tot.tax+tot.ded)!==tot.net) warns.push('실수령액 '+fmt(tot.net)+'이 급여총액−공제와 달라요');
-    items.info={slip:true,tot:tot,sumIn:sumIn,sumDed:sumDed,warns:warns,ok:warns.length===0&&!!tot.gross};
+    if(unreadable.length) warns.push('금액을 읽지 못한 항목이 있어요: '+unreadable.join(', '));
+    items.info={slip:true,tot:tot,sumIn:sumIn,sumDed:sumDed,warns:warns,repaired:repaired,ok:warns.length===0&&!!tot.gross};
     return items;
   },
   parse(text,today,cats){

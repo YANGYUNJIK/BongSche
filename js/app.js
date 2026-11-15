@@ -552,7 +552,8 @@ function phHTML(){
   if(info&&info.slip){
     const t=info.tot,f=n=>won(n)+'원';
     h+='<div class="card" style="padding:10px 12px;margin:6px 0"><b>월급 명세서로 읽었어요</b><div class="sub" style="margin-top:2px">급여총액 '+f(t.gross)+' · 세금·공제 '+f(t.tax+t.ded)+' · 실수령액 '+f(t.net)+(p.tries>1?' · '+p.tries+'번 읽었어요':'')+'</div>'+
-      (info.ok?'<div style="margin-top:4px;color:var(--save)">✔ 항목을 더한 값이 총액과 맞아요</div>':'<div style="margin-top:4px;color:var(--over)">⚠ '+info.warns.map(esc).join('<br>⚠ ')+'<br>빠졌거나 잘못 읽은 항목이 있어요. 아래 금액을 명세서와 비교해 고쳐 주세요.</div>')+'</div>';
+      (info.ok?'<div style="margin-top:4px;color:var(--save)">✔ 항목을 더한 값이 총액과 맞아요</div>':'<div style="margin-top:4px;color:var(--over)">⚠ '+info.warns.map(esc).join('<br>⚠ ')+'<br>빠졌거나 잘못 읽은 항목이 있어요. 아래 금액을 명세서와 비교해 고쳐 주세요.</div>')+
+      (info.repaired&&info.repaired.length?'<div class="sub" style="margin-top:4px">글자가 깨져서 합계로 계산한 금액: '+info.repaired.map(esc).join(', ')+' (명세서와 한 번 확인해 주세요)</div>':'')+'</div>';
     const have=ensureYear(S.year)[S.view].tx.filter(x=>x.t==='in'||x.t==='ded').length;
     if(have) h+='<p class="sub" style="color:var(--over)">'+S.view+'월에 이미 수입·공제가 '+have+'건 있어요. 등록하면 같은 항목이 두 번 들어가니, 필요하면 먼저 지우세요.</p>';
   }
