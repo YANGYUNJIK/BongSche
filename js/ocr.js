@@ -23,10 +23,36 @@ const Ocr={
       langPath:abs('vendor/tesseract/lang'),
       logger:m=>{if(Ocr.onLog) Ocr.onLog(m)}
     });
+    await this._worker.setParameters({tessedit_pageseg_mode:'6'});
     return this._worker;
   },
-  /* 사진을 읽기 좋게: 크기를 줄이고(최대 1800px), 흑백으로 바꾸고, 밝기 차이를 넓혀요 */
-  prep(file){
+  /* 표의 가로·세로 선을 지워요 (선이 있으면 글자 인식이 크게 흐트러져요). gray: 흑백 픽셀 배열 */
+  removeLines(gray,w,h,minRun){
+    const dark=v=>v<140,mask=new Uint8Array(w*h);
+    for(let y=0;y<h;y++){
+      let x=0;
+      while(x<w){
+        if(dark(gray[y*w+x])){const s=x;while(x<w&&dark(gray[y*w+x])) x++;if(x-s>=minRun) for(let k=s;k<x;k++) mask[y*w+k]=1}
+        else x++;
+      }
+    }
+    for(let x=0;x<w;x++){
+      let y=0;
+      while(y<h){
+        if(dark(gray[y*w+x])){const s=y;while(y<h&&dark(gray[y*w+x])) y++;if(y-s>=minRun) for(let k=s;k<y;k++) mask[k*w+x]=1}
+        else y++;
+      }
+    }
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){      // 선 바로 옆 한 줄도 같이 지워요
+      if(mask[y*w+x]) continue;
+      if((x>0&&mask[y*w+x-1]===1)||(x<w-1&&mask[y*w+x+1]===1)||(y>0&&mask[(y-1)*w+x]===1)||(y<h-1&&mask[(y+1)*w+x]===1)) mask[y*w+x]=2;
+    }
+    for(let i=0;i<w*h;i++) if(mask[i]) gray[i]=255;
+    return gray;
+  },
+  /* 사진을 읽기 좋게: 작은 사진은 2배로 키우고, 크면 줄이고(최대 1800~2000px), 흑백으로 바꾸고, 밝기 차이를 넓히고, 표의 선을 지워요 */
+  prep(file,vi){
+    vi=vi||0;
     return new Promise((resolve,reject)=>{
       const fr=new FileReader();
       fr.onerror=()=>reject(new Error('사진을 읽지 못했어요'));
@@ -34,7 +60,7 @@ const Ocr={
         const img=new Image();
         img.onerror=()=>reject(new Error('사진 형식을 읽지 못했어요'));
         img.onload=()=>{
-          const k=Math.min(1,1800/Math.max(img.width,img.height));
+          const big=Math.max(img.width,img.height),k=big<1400?Math.min([2,2.5,1.75,1.5][vi]||2,2400/big):Math.min(1,([1800,2200,1400,1100][vi]||1800)/big);
           const c=document.createElement('canvas');c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);
           const g=c.getContext('2d');g.drawImage(img,0,0,c.width,c.height);
           const im=g.getImageData(0,0,c.width,c.height),d=im.data,hist=new Array(256).fill(0);
@@ -43,6 +69,10 @@ const Ocr={
           for(let v=0;v<256;v++){acc+=hist[v];if(acc>=n*0.02){lo=v;break}}
           acc=0;for(let v=255;v>=0;v--){acc+=hist[v];if(acc>=n*0.02){hi=v;break}}
           if(hi-lo>30){const sc=255/(hi-lo);for(let i=0;i<d.length;i+=4){const v=Math.max(0,Math.min(255,Math.round((d[i]-lo)*sc)));d[i]=d[i+1]=d[i+2]=v}}
+          const gray=new Uint8Array(c.width*c.height);
+          for(let i=0,j=0;i<d.length;i+=4,j++) gray[j]=d[i];
+          this.removeLines(gray,c.width,c.height,Math.max(40,Math.min(120,Math.round(Math.max(c.width,c.height)*0.045))));
+          for(let i=0,j=0;i<d.length;i+=4,j++){d[i]=d[i+1]=d[i+2]=gray[j]}
           g.putImageData(im,0,0);
           // 화면에 보여 줄 작은 사진
           const t=document.createElement('canvas'),tk=Math.min(1,480/Math.max(c.width,c.height));t.width=Math.round(c.width*tk);t.height=Math.round(c.height*tk);
@@ -54,12 +84,28 @@ const Ocr={
       fr.readAsDataURL(file);
     });
   },
-  async read(file){
-    const p=await this.prep(file),w=await this.getWorker();
+  async readOnce(file,vi){
+    const p=await this.prep(file,vi),w=await this.getWorker();
     const r=await w.recognize(p.canvas);
     clearTimeout(this._idle);
     this._idle=setTimeout(()=>{if(Ocr._worker){Ocr._worker.terminate();Ocr._worker=null}},90000);   // 안 쓰면 메모리 반납
     return {text:r.data.text||'',thumb:p.thumb};
+  },
+  /* 읽고 해석해요. 영수증은 한 번, 월급 명세서처럼 합계를 맞춰 볼 수 있는 사진은 합계가 안 맞으면 배율을 바꿔 최대 4번 읽어요 */
+  async readAndParse(file,today,cats,progress){
+    let best=null;
+    for(let vi=0;vi<4;vi++){
+      const r=await this.readOnce(file,vi);
+      const items=this.parse(r.text,today,cats),info=items.info;
+      const cand={text:r.text,thumb:r.thumb,items:items,tries:vi+1};
+      if(!info||!info.slip) return cand;
+      if(info.ok) return cand;
+      const score=x=>(x.items.length>=3?0:100)+(x.items.info?x.items.info.warns.length:5);
+      if(!best||score(cand)<score(best)) best=cand;
+      if(progress&&vi<3) progress('합계가 안 맞아서 다시 읽는 중이에요 ('+(vi+2)+'/4)');
+    }
+    best.tries=4;
+    return best;
   },
 
   /* ───── 읽은 글자 → 내역 ───── */
@@ -184,10 +230,101 @@ const Ocr={
     });
     return items;
   },
+  /* ───── 월급 명세서(표) ───── */
+  SLIP_IN:['본봉','정근수당','정근수당가산금','정액급식비','교직수당','교직수당가산금','시간외근무수당','교원연구비','성과상여금','명절휴가비','가족수당','직책수당','담임수당','연가보상비','직무수당','특수업무수당','보전수당','기타수당'],
+  SLIP_DED:['소득세','지방소득세','일반기여금','건강보험','노인장기요양보험','장기요양보험','교직원공제회비','교원연합회비','국민연금','고용보험','연말정산소득세','연말정산지방소득세','학자금상환','기타공제'],
+  lev(a,b){
+    const m=a.length,n=b.length;if(!m) return n;if(!n) return m;
+    let prev=[];for(let j=0;j<=n;j++) prev[j]=j;
+    for(let i=1;i<=m;i++){const cur=[i];for(let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur}
+    return prev[n];
+  },
+  isSlip(text){
+    const hits=[/급[여며]\s*(?:내역|총액|명세)/,/공제\s*(?:내역|총액)/,/세금\s*(?:내역|총액)/,/실\s*수\s*령/,/본\s*봉/].filter(re=>re.test(text)).length;
+    return hits>=2;
+  },
+  /* 읽은 이름을 표준 항목 이름으로 바로잡아요 (예: 노민장기요양보험 → 노인장기요양보험) */
+  slipName(raw){
+    const base=String(raw).replace(/\([^)]*\)?/g,'').replace(/[^가-힣A-Za-z]/g,'');
+    if(base.length<2) return null;
+    let best=null,bd=99;
+    [['in',this.SLIP_IN],['ded',this.SLIP_DED]].forEach(g=>g[1].forEach(nm=>{
+      const d=this.lev(base,nm),lim=Math.max(1,Math.floor(nm.length/4));
+      if(d<=lim&&d<bd){bd=d;best={kind:g[0],name:nm}}
+    }));
+    return best;
+  },
+  mapSlipCat(kind,name,cats){
+    const list=kind==='in'?cats.in:(cats.ded||[]);
+    if(list.indexOf(name)>=0) return name;
+    const pre=list.filter(c=>c.length>=3&&(name.indexOf(c)===0||c.indexOf(name)===0)).sort((a,b)=>b.length-a.length)[0];
+    if(pre) return pre;
+    return kind==='in'?(list.indexOf('추가 수입')>=0?'추가 수입':null):(list.indexOf('기타 공제')>=0?'기타 공제':null);
+  },
+  /* 자주 틀리게 읽는 글자를 감안한 낱말 찾기 (여↔며, 공↔곰, 총↔흥 등) */
+  RX_GROSS:/급[여며녀]\s*[총흥종]\s*[액엑]|급[여며녀]\s*합계/,
+  RX_TAX:/세\s*[금큼]\s*[총흥종]\s*[액엑]/,
+  RX_DED:/[공곰]\s*제\s*[총흥종]\s*[액엑]/,
+  RX_NET:/실\s*수\s*[령형]/,
+  DED_ORDER:['일반기여금','건강보험','노인장기요양보험','교직원공제회비','교원연합회비'],
+  parseSlip(lines,cats){
+    const AMT=/^-?(?:\d{1,3}(?:,\d{3})+|\d{4,})$/;
+    const items=[],tot={gross:0,tax:0,ded:0,net:0,netRead:false};let first=true,lastIncomeTax=0;
+    const seen={};
+    lines.forEach(line=>{
+      const fixed=line.replace(/[|│┃]/g,' ').replace(/(\d)\.(\d{3})(?!\d)/g,'$1,$2').replace(/(\d),\s(\d{3})/g,'$1,$2');
+      const toks=fixed.split(/\s+/).filter(Boolean);
+      const pairs=[];let nm=[];
+      toks.forEach(t=>{if(AMT.test(t)){pairs.push({name:nm.join(' '),amt:Number(t.replace(/,/g,''))});nm=[]}else nm.push(t)});
+      const isTotals=pairs.length>=2&&pairs.some(p=>this.RX_GROSS.test(p.name.replace(/\s+/g,''))||this.RX_TAX.test(p.name.replace(/\s+/g,'')));
+      if(isTotals){                      // 급여총액 · 세금총액 · 공제총액이 한 줄에 있어요 (이름이 깨져도 순서로 알 수 있어요)
+        const g=pairs.find(p=>this.RX_GROSS.test(p.name.replace(/\s+/g,'')));
+        const t=pairs.find(p=>this.RX_TAX.test(p.name.replace(/\s+/g,'')));
+        if(g) tot.gross=g.amt;else if(pairs[0]) tot.gross=pairs[0].amt;
+        if(t) tot.tax=t.amt;else if(pairs[1]) tot.tax=pairs[1].amt;
+        const d=pairs.find(p=>this.RX_DED.test(p.name.replace(/\s+/g,'')));
+        if(d) tot.ded=d.amt;else if(pairs[2]) tot.ded=pairs[2].amt;
+        return;
+      }
+      pairs.forEach((p,idx)=>{
+        const nrm=p.name.replace(/\s+/g,'');
+        if(this.RX_GROSS.test(nrm)){tot.gross=p.amt;return}
+        if(this.RX_TAX.test(nrm)){tot.tax=p.amt;return}
+        if(this.RX_DED.test(nrm)){tot.ded=p.amt;return}
+        if(this.RX_NET.test(nrm)){tot.net=p.amt;tot.netRead=true;return}
+        let hit=this.slipName(p.name),kind,name;
+        if(hit){kind=hit.kind;name=hit.name}
+        else{
+          kind=(idx===0)?'in':'ded';
+          if(kind==='in') name=(first?'본봉':(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함'));
+          else if(lastIncomeTax&&Math.abs(p.amt-Math.floor(lastIncomeTax/100)*10)<=20&&!seen['지방소득세']) name='지방소득세';        // 지방소득세는 소득세의 10%
+          else{const nx=this.DED_ORDER.find(x=>!seen[x]);name=nx||(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함')}
+        }
+        // 마이너스 금액(연말정산 환급 등)은 같은 종류의 항목에서 빼 줘요
+        if(p.amt<0){
+          const host=items.find(i=>i.type==='ded'&&((/건강보험/.test(p.name)&&i.n==='건강보험')||(/장기요양|요양/.test(p.name)&&i.n==='노인장기요양보험')));
+          if(host){host.a+=p.amt;host.merged=(host.merged||'')+p.name;return}
+          kind='ded';
+        }
+        first=false;seen[name]=true;
+        if(name==='소득세') lastIncomeTax=p.amt;
+        items.push({date:null,n:name,a:Math.abs(p.amt),type:kind==='in'?'in':'ded',c:this.mapSlipCat(kind,name,cats)});
+      });
+    });
+    if(!tot.netRead&&tot.gross&&(tot.tax||tot.ded)) tot.net=tot.gross-tot.tax-tot.ded;       // 실수령액을 못 읽었으면 계산해요
+    const sumIn=items.filter(i=>i.type==='in').reduce((s,i)=>s+i.a,0),sumDed=items.filter(i=>i.type==='ded').reduce((s,i)=>s+i.a,0);
+    const fmt=n=>n.toLocaleString('ko-KR')+'원',warns=[];
+    if(tot.gross&&sumIn!==tot.gross) warns.push('급여 항목을 더하면 '+fmt(sumIn)+'인데 급여총액은 '+fmt(tot.gross)+'이에요');
+    if((tot.tax||tot.ded)&&sumDed!==tot.tax+tot.ded) warns.push('세금·공제 항목을 더하면 '+fmt(sumDed)+'인데 총액은 '+fmt(tot.tax+tot.ded)+'이에요');
+    if(tot.netRead&&tot.gross&&tot.gross-(tot.tax+tot.ded)!==tot.net) warns.push('실수령액 '+fmt(tot.net)+'이 급여총액−공제와 달라요');
+    items.info={slip:true,tot:tot,sumIn:sumIn,sumDed:sumDed,warns:warns,ok:warns.length===0&&!!tot.gross};
+    return items;
+  },
   parse(text,today,cats){
-    cats=cats||{out:[],in:[]};
+    cats=cats||{out:[],in:[],ded:[]};
     const lines=String(text||'').split(/\r?\n/).map(s=>s.replace(/\s+/g,' ').trim()).filter(s=>s.length>0);
     if(!lines.length) return [];
+    if(this.isSlip(String(text))){const sl=this.parseSlip(lines,cats);if(sl.length>=3) return sl}
     const dated=lines.filter(l=>this.findDate(l,today)&&this.amountsIn(this.findDate(l,today).text).length&&!this.KEY_TOTAL.test(l));
     if(dated.length>=2){const li=this.parseList(lines,today,cats);if(li.length>=2) return li}
     return this.parseSingle(lines,today,cats);

@@ -57,7 +57,7 @@ function bulkBarHTML(){
 function dockHTML(){
   const tabs=[['home','홈'],['list','내역'],['budget','예산'],['stats','통계'],['more','더보기']];
   return '<div class="dock">'+(UI.selMode&&UI.tab==='list'?bulkBarHTML():'')+
-    (UI.fab?'<div class="fabmenu"><button type="button" data-act="add">직접 입력</button><button type="button" data-act="photo">📷 사진으로 입력</button><button type="button" data-act="paste">붙여넣어 입력</button></div>':'')+
+    (UI.fab?'<div class="fabmenu"><button type="button" data-act="add">직접 입력</button><button type="button" data-act="photo">📷 사진 찍어 입력</button><button type="button" data-act="gallery">🖼 앨범·캡처에서 입력</button><button type="button" data-act="paste">붙여넣어 입력</button></div>':'')+
     '<button class="fab" type="button" data-act="fab" aria-label="내역 추가">'+(UI.fab?'×':'+')+'</button>'+
     '<nav class="nav" aria-label="주 메뉴">'+tabs.map(t=>'<button type="button" data-tab="'+t[0]+'"'+(UI.tab===t[0]?' class="on" aria-current="page"':'')+'>'+ICON[t[0]]+t[1]+'</button>').join('')+'</nav></div>';
 }
@@ -512,9 +512,9 @@ function edDup(){
 }
 
 /* ───── 사진으로 입력 ───── */
-function startPhoto(){
+function startPhoto(gallery){
   UI.fab=false;render(true);
-  const inp=$('#photo-in');inp.value='';inp.click();
+  const inp=$(gallery?'#photo-in2':'#photo-in');inp.value='';inp.click();
 }
 async function onPhoto(file){
   if(!file) return;
@@ -522,31 +522,45 @@ async function onPhoto(file){
   try{const r=await Photo.analyze(file,isoToday(),msg=>toast(msg));openPhotoSheet(r)}
   catch(err){toast(err&&err.message?err.message:'사진을 읽지 못했어요')}
 }
-function phRows(items){
+function payDay(){
+  const src=prevPayMonth(S.year,S.view);
+  if(src){const t=ensureYear(src.y)[src.m].tx.find(x=>x.t==='in'&&x.d);if(t) return t.d}
+  return 17;
+}
+function phRows(items,slip){
   return items.map(it=>{
-    const type=it.type==='in'?'in':'out';
+    const type=it.type==='in'?'in':(it.type==='ded'?'ded':'out');
     const cat=CATS[type].find(c=>c.name===it.c||c.id===it.c)||CATS[type].find(c=>c.id===OTHER[type]);
-    let mo=S.view,d=isCur(S.year,S.view)?NOW.getDate():1;
+    let mo=S.view,d=slip?Math.min(payDay(),daysIn(S.year,S.view)):(isCur(S.year,S.view)?NOW.getDate():1);
     const dm=it.date&&/^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(it.date));
     if(dm&&Number(dm[1])===S.year){mo=Number(dm[2]);d=Number(dm[3])}
     return {on:true,mo:mo,d:d,n:String(it.n||''),a:won(Number(it.a)||0),k:type+'|'+cat.id};
   });
 }
 function openPhotoSheet(r){
-  UI.PH={mode:r.mode,note:r.note||'',text:r.text||'',thumb:r.thumb,rows:phRows(r.items)};
+  UI.PH={mode:r.mode,note:r.note||'',text:r.text||'',thumb:r.thumb,info:r.info||null,tries:r.tries||1,rows:phRows(r.items,!!(r.info&&r.info.slip))};
   layerOpen(phHTML());
 }
 function phHTML(){
   const p=UI.PH;
-  const opts=sel=>['out','in'].map(ty=>'<optgroup label="'+TL[ty]+'">'+CATS[ty].map(c=>'<option value="'+ty+'|'+esc(c.id)+'"'+(sel===ty+'|'+c.id?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</optgroup>').join('');
+  const opts=sel=>['out','in','ded'].map(ty=>'<optgroup label="'+TL[ty]+'">'+CATS[ty].map(c=>'<option value="'+ty+'|'+esc(c.id)+'"'+(sel===ty+'|'+c.id?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</optgroup>').join('');
   let h='<h2>사진에서 읽은 내역</h2>';
   if(p.mode==='mock') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">미리보기 화면이라 예시 결과를 보여 줘요. 폰에 설치한 앱에서는 사진을 실제로 읽어요.</p>';
   else if(p.mode==='ocr') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">폰 안에서 글자를 읽은 결과예요. 글자를 잘못 읽을 수 있으니 <b>날짜와 금액을 꼭 확인</b>하고 고쳐 주세요. (더보기 → 사진 분석에서 API 키를 넣으면 더 정확해요)'+(p.note?'<br>'+esc(p.note):'')+'</p>';
   else h+='<p class="sub">잘못 읽은 곳은 고친 뒤에 등록하세요.</p>';
+  const info=p.info;
+  if(info&&info.slip){
+    const t=info.tot,f=n=>won(n)+'원';
+    h+='<div class="card" style="padding:10px 12px;margin:6px 0"><b>월급 명세서로 읽었어요</b><div class="sub" style="margin-top:2px">급여총액 '+f(t.gross)+' · 세금·공제 '+f(t.tax+t.ded)+' · 실수령액 '+f(t.net)+(p.tries>1?' · '+p.tries+'번 읽었어요':'')+'</div>'+
+      (info.ok?'<div style="margin-top:4px;color:var(--save)">✔ 항목을 더한 값이 총액과 맞아요</div>':'<div style="margin-top:4px;color:var(--over)">⚠ '+info.warns.map(esc).join('<br>⚠ ')+'<br>빠졌거나 잘못 읽은 항목이 있어요. 아래 금액을 명세서와 비교해 고쳐 주세요.</div>')+'</div>';
+    const have=ensureYear(S.year)[S.view].tx.filter(x=>x.t==='in'||x.t==='ded').length;
+    if(have) h+='<p class="sub" style="color:var(--over)">'+S.view+'월에 이미 수입·공제가 '+have+'건 있어요. 등록하면 같은 항목이 두 번 들어가니, 필요하면 먼저 지우세요.</p>';
+  }
   if(p.thumb) h+='<img src="'+p.thumb+'" alt="찍은 사진" style="max-width:100%;max-height:140px;border-radius:8px;border:1px solid var(--rule);display:block;margin:6px 0">';
+  if(p.mode==='ocr'&&p.text&&p.text.trim()&&p.rows.length) h+='<details style="margin:4px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button></details>';
   if(!p.rows.length){
     h+='<p class="empty" style="font-size:20px">읽을 수 있는 내역이 없었어요.<br>사진을 더 가깝고 밝게 찍어 보세요.</p>';
-    if(p.text&&p.text.trim()) h+='<details style="margin:6px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre></details><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button>';
+    if(p.text&&p.text.trim()) h+='<details open style="margin:6px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre></details><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button>';
   }
   p.rows.forEach((r,i)=>{
     h+='<div class="pp" data-pi="'+i+'"><input type="checkbox" class="ph-on"'+(r.on?' checked':'')+' aria-label="등록"><div class="row-flex"><input class="inp ph-d" style="width:62px;min-height:40px;padding:4px 8px" inputmode="numeric" value="'+r.d+'" aria-label="일"><input class="inp ph-n" style="min-height:40px;padding:4px 8px" value="'+esc(r.n)+'" aria-label="내용"></div>'+
@@ -841,7 +855,8 @@ document.addEventListener('click',e=>{
     const a=b.dataset.act;
     if(a==='fab'){UI.fab=!UI.fab;render(true)}
     else if(a==='add'){UI.fab=false;render(true);openEditor()}
-    else if(a==='photo') startPhoto();
+    else if(a==='photo') startPhoto(false);
+    else if(a==='gallery') startPhoto(true);
     else if(a==='paste'){UI.fab=false;render(true);if(GApp.openPaste) GApp.openPaste()}
     else if(a==='search'){if(GApp.openSearch) GApp.openSearch()}
     else if(a==='copypay') copyPay();
@@ -894,7 +909,7 @@ document.addEventListener('change',e=>{
     else if(t.classList.contains('ph-k')) r.k=t.value;
     return;
   }
-  if(t.id==='photo-in'){onPhoto(t.files&&t.files[0]);return}
+  if(t.id==='photo-in'||t.id==='photo-in2'){onPhoto(t.files&&t.files[0]);return}
   if(t.id==='import-in'){
     const f=t.files&&t.files[0];if(!f) return;
     const r=new FileReader();
@@ -909,6 +924,7 @@ document.addEventListener('keydown',e=>{
 
 /* ───── 시작 ───── */
 const ph=document.createElement('input');ph.type='file';ph.id='photo-in';ph.accept='image/*';ph.setAttribute('capture','environment');ph.hidden=true;document.body.appendChild(ph);
+const ph2=document.createElement('input');ph2.type='file';ph2.id='photo-in2';ph2.accept='image/*';ph2.hidden=true;document.body.appendChild(ph2);
 const im=document.createElement('input');im.type='file';im.id='import-in';im.accept='application/json,.json';im.hidden=true;document.body.appendChild(im);
 Object.assign(GApp,{UI:UI,S:S,render:render,toast:toast,layerOpen:layerOpen,sheetRender:sheetRender,layerClose:layerClose,snap:snap,restore:restore,openEditor:openEditor,itemHTML:itemHTML,
   money:money,sg:sg,cls:cls,isCur:isCur,loadY:loadY,$:$,$$:$$,enterSub:enterSub,leaveSub:leaveSub,copyPay:copyPay,openQuick:openQuick,isoToday:isoToday,TL:TL,HUES:HUES,endSel:endSel,

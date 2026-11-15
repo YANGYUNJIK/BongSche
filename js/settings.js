@@ -227,7 +227,7 @@ function fxSave(){
 /* ───── 사진 분석 (API 키) ───── */
 G.subs.photo={title:'사진 분석',html:function(){
   const k=Photo.getKey();
-  return '<p class="sub" style="margin:0 2px 8px">사진을 찍으면 날짜, 내용, 금액, 분류를 읽고 수입인지 지출인지도 골라 줘요(영수증, 카드 문자 캡처, 입금 내역, 급여명세서).</p>'+
+  return '<p class="sub" style="margin:0 2px 8px">사진을 찍으면 날짜, 내용, 금액, 분류를 읽고 수입인지 지출인지도 골라 줘요(영수증, 카드 문자 캡처, 입금 내역, 급여명세서). <b>화면 캡처를 앨범에서 고르는 게 가장 잘 읽혀요.</b></p>'+
     '<section class="card"><h2 class="sec" style="margin:0 0 4px">기본: 폰 안에서 읽기</h2><div class="sub">키도 인터넷도 필요 없어요(처음 한 번만 글자 인식 파일 약 9MB를 받아요). 사진은 폰 밖으로 나가지 않아요. 흐리거나 비뚤어진 사진은 글자를 잘못 읽을 수 있으니, 등록 전에 날짜와 금액을 꼭 확인하세요.</div></section>'+
     '<section class="card"><h2 class="sec" style="margin:0 0 4px">선택: API 키로 더 정확하게</h2><div class="sub" style="margin-bottom:6px">Anthropic(Claude)에 사진을 보내서 읽어요. 키가 있으면 이 방법을 먼저 쓰고, 안 되면 폰 안에서 읽어요.</div>'+
     '<div class="ln"><span>상태</span><span class="l"></span><b>'+(k?'키 저장됨 (…'+esc(k.slice(-4))+')':'키 없음 — 폰 안에서 읽어요')+'</b></div>'+

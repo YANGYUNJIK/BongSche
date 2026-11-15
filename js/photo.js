@@ -29,26 +29,28 @@ const Photo={
       r.readAsDataURL(file);
     });
   },
-  catNames(){const o={};['out','in'].forEach(t=>{o[t]=CATS[t].map(c=>c.name)});return o},
+  catNames(){const o={};['out','in','ded'].forEach(t=>{o[t]=CATS[t].map(c=>c.name)});return o},
 
   buildPrompt(today,cats){
-    const out=cats.out||[],inc=cats.in||[];
+    const out=cats.out||[],inc=cats.in||[],ded=cats.ded||[];
     return [
       '당신은 한국어 가계부 입력을 돕는 도우미예요. 사진은 영수증, 카드 결제 내역 화면, 은행 거래 내역, 급여명세서 중 하나예요.',
       '사진에 보이는 거래를 읽어서 JSON만 출력하세요. 설명이나 마크다운 코드 블록은 쓰지 마세요.',
       '오늘 날짜: '+today,
       '',
-      '형식: {"items":[{"date":"YYYY-MM-DD 또는 null","n":"가게 또는 내용(짧게)","a":금액(정수),"type":"out 또는 in","c":"분류 이름 또는 null"}]}',
+      '형식: {"items":[{"date":"YYYY-MM-DD 또는 null","n":"가게 또는 내용(짧게)","a":금액(정수),"type":"out, in, ded 중 하나","c":"분류 이름 또는 null"}]}',
       '',
       '규칙:',
       '- 영수증 한 장이면 합계 금액 하나만 한 건으로 만들고, 내용(n)에는 가게 이름을 쓰세요. 품목별로 나누지 마세요.',
       '- 카드 내역이나 거래 내역 화면이면 보이는 거래마다 한 건씩 만드세요.',
       '- 돈을 쓴 것은 type "out", 돈이 들어온 것(급여, 입금, 환불·취소)은 "in"이에요.',
+      '- 급여명세서면 급여 항목(본봉, 수당 등)은 항목마다 "in"으로, 세금과 공제 항목(소득세, 건강보험 등)은 항목마다 "ded"로 만드세요. 합계 줄(급여총액, 공제총액, 실수령액)은 만들지 마세요.',
       '- 금액(a)은 원 단위 정수예요. 쉼표나 "원" 글자 없이 숫자만 쓰세요.',
       '- 날짜가 없거나 읽을 수 없으면 null이에요. 연도가 없으면 오늘 날짜의 연도를 쓰세요.',
       '- 분류(c)는 아래 목록에서 가장 알맞은 하나를 글자 그대로 고르세요. 알맞은 것이 없으면 null이에요.',
       '  지출 분류: '+(out.join(', ')||'(없음)'),
       '  수입 분류: '+(inc.join(', ')||'(없음)'),
+      '  공제 분류: '+(ded.join(', ')||'(없음)'),
       '- 거래를 읽을 수 없거나 거래 사진이 아니면 {"items":[]} 만 출력하세요.'
     ].join('\n');
   },
@@ -71,7 +73,7 @@ const Photo={
       if(!x||typeof x!=='object') return;
       const a=Math.round(Number(String(x.a==null?'':x.a).replace(/[^\d.]/g,'')));
       if(!(a>0)) return;
-      const type=x.type==='in'?'in':'out',list=Array.isArray(cats[type])?cats[type]:[];
+      const type=x.type==='in'?'in':(x.type==='ded'?'ded':'out'),list=Array.isArray(cats[type])?cats[type]:[];
       items.push({date:this.normDate(x.date,today),n:String(x.n==null?'':x.n).trim().slice(0,40),a:a,type:type,c:(typeof x.c==='string'&&list.indexOf(x.c)>=0)?x.c:null});
     });
     return items;
@@ -96,12 +98,12 @@ const Photo={
       if(m.status==='recognizing text') progress('사진 읽는 중 '+Math.round((m.progress||0)*100)+'%');
       else if(/loading|initializ/.test(m.status||'')) progress('글자 인식 준비 중이에요 (처음 한 번은 오래 걸려요)');
     };
-    try{r=await Ocr.read(file)}
+    try{r=await Ocr.readAndParse(file,today,this.catNames(),progress)}
     catch(e){
       if(window.__PREVIEW__){const img=await this.resize(file);return {mode:'mock',thumb:img.dataUrl,items:this.mockItems(today),text:'',note:''}}
       throw new Error(e&&e.message?e.message:'사진을 읽지 못했어요');
     }
-    return {mode:'ocr',thumb:r.thumb,text:r.text,items:Ocr.parse(r.text,today,this.catNames()),note:note||''};
+    return {mode:'ocr',thumb:r.thumb,text:r.text,items:r.items,info:r.items.info||null,tries:r.tries,note:note||''};
   },
   async analyzeAI(file,today){
     const img=await this.resize(file),key=this.getKey(),cats=this.catNames();
@@ -121,7 +123,7 @@ const Photo={
     }
     let data;try{data=await res.json()}catch(e){throw new Error('분석 결과를 읽지 못했어요')}
     const text=(Array.isArray(data.content)?data.content:[]).filter(b=>b&&b.type==='text').map(b=>b.text).join('\n');
-    return {mode:'ai',thumb:img.dataUrl,text:'',items:this.parseItems(text,today,cats),note:''};
+    return {mode:'ai',thumb:img.dataUrl,text:'',items:this.parseItems(text,today,cats),info:null,note:''};
   },
   /* 키가 없을 때 화면을 확인하기 위한 예시: 실제로 사진을 읽지 않아요 */
   mockItems(today){
