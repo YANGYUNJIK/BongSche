@@ -534,11 +534,11 @@ function phRows(items,slip){
     let mo=S.view,d=slip?Math.min(payDay(),daysIn(S.year,S.view)):(isCur(S.year,S.view)?NOW.getDate():1);
     const dm=it.date&&/^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(it.date));
     if(dm&&Number(dm[1])===S.year){mo=Number(dm[2]);d=Number(dm[3])}
-    return {on:true,mo:mo,d:d,n:String(it.n||''),a:won(Number(it.a)||0),k:type+'|'+cat.id};
+    return {on:true,mo:mo,d:d,n:String(it.n||''),a:won(Number(it.a)||0),k:type+'|'+cat.id,g:it.grp||''};
   });
 }
 function openPhotoSheet(r){
-  UI.PH={mode:r.mode,note:r.note||'',text:r.text||'',thumb:r.thumb,info:r.info||null,tries:r.tries||1,rows:phRows(r.items,!!(r.info&&r.info.slip))};
+  UI.PH={mode:r.mode,note:r.note||'',text:r.text||'',thumb:r.thumb,info:r.info||null,tries:r.tries||1,blurry:!!r.blurry,rows:phRows(r.items,!!(r.info&&r.info.slip))};
   layerOpen(phHTML());
 }
 function phHTML(){
@@ -546,13 +546,19 @@ function phHTML(){
   const opts=sel=>['out','in','ded'].map(ty=>'<optgroup label="'+TL[ty]+'">'+CATS[ty].map(c=>'<option value="'+ty+'|'+esc(c.id)+'"'+(sel===ty+'|'+c.id?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</optgroup>').join('');
   let h='<h2>사진에서 읽은 내역</h2>';
   if(p.mode==='mock') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">미리보기 화면이라 예시 결과를 보여 줘요. 폰에 설치한 앱에서는 사진을 실제로 읽어요.</p>';
-  else if(p.mode==='ocr') h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">폰 안에서 글자를 읽은 결과예요. 글자를 잘못 읽을 수 있으니 <b>날짜와 금액을 꼭 확인</b>하고 고쳐 주세요. (더보기 → 사진 분석에서 API 키를 넣으면 더 정확해요)'+(p.note?'<br>'+esc(p.note):'')+'</p>';
+  else if(p.mode==='ocr'&&!p.blurry) h+='<p class="sub" style="background:var(--tint-warn);padding:6px 10px;border-radius:8px">폰 안에서 글자를 읽은 결과예요. 글자를 잘못 읽을 수 있으니 <b>날짜와 금액을 꼭 확인</b>하고 고쳐 주세요. (더보기 → 사진 분석에서 API 키를 넣으면 더 정확해요)'+(p.note?'<br>'+esc(p.note):'')+'</p>';
   else h+='<p class="sub">잘못 읽은 곳은 고친 뒤에 등록하세요.</p>';
-  const info=p.info;
-  if(info&&info.slip){
-    const t=info.tot,f=n=>won(n)+'원';
-    h+='<div class="card" style="padding:10px 12px;margin:6px 0"><b>월급 명세서로 읽었어요</b><div class="sub" style="margin-top:2px">급여총액 '+f(t.gross)+' · 세금·공제 '+f(t.tax+t.ded)+' · 실수령액 '+f(t.net)+(p.tries>1?' · '+p.tries+'번 읽었어요':'')+'</div>'+
-      (info.ok?'<div style="margin-top:4px;color:var(--save)">✔ 항목을 더한 값이 총액과 맞아요</div>':'<div style="margin-top:4px;color:var(--over)">⚠ '+info.warns.map(esc).join('<br>⚠ ')+'<br>빠졌거나 잘못 읽은 항목이 있어요. 아래 금액을 명세서와 비교해 고쳐 주세요.</div>')+
+  const info=p.info,rowGroup=r=>r.k.indexOf('in|')===0?'in':(r.k.indexOf('ded|')===0?(r.g==='tax'?'tax':'ded'):'out');
+  const isSlip=!!(info&&info.slip);
+  if(isSlip){
+    const t=info.tot,f=n=>won(n)+'원',sum={in:0,tax:0,ded:0};
+    p.rows.forEach(r=>{if(r.on){const g=rowGroup(r);if(sum[g]!==undefined) sum[g]+=num(r.a)}});
+    const chk=(label,have,want)=>want?(have===want?'<span style="color:var(--save)">✔ '+label+' '+f(have)+'</span>':'<span style="color:var(--over)">⚠ '+label+' '+f(have)+' (명세서 '+f(want)+')</span>'):'<span>'+label+' '+f(have)+'</span>';
+    const allOk=(!t.gross||sum.in===t.gross)&&(!t.tax||sum.tax===t.tax)&&(!t.ded||sum.ded===t.ded)&&t.gross>0;
+    h+='<div class="card" style="padding:10px 12px;margin:6px 0"><b>월급 명세서로 읽었어요</b><div class="sub" style="margin-top:2px">실수령액 '+f(t.net)+(p.tries>1?' · '+p.tries+'번 읽었어요':'')+'</div>'+
+      '<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px">'+chk('급여내역',sum.in,t.gross)+chk('세금내역',sum.tax,t.tax)+chk('공제내역',sum.ded,t.ded)+'</div>'+
+      (allOk?'<div style="margin-top:4px;color:var(--save)">✔ 세 칸의 합계가 모두 명세서와 맞아요</div>':'<div style="margin-top:4px;color:var(--over)">⚠ 맞지 않는 칸이 있어요. 빠졌거나 잘못 읽은 항목을 명세서와 비교해 고쳐 주세요.</div>')+
+      (info.warns.filter(x=>/읽지 못한/.test(x)).length?'<div class="sub" style="margin-top:2px;color:var(--over)">'+info.warns.filter(x=>/읽지 못한/.test(x)).map(esc).join('<br>')+'</div>':'')+
       (info.repaired&&info.repaired.length?'<div class="sub" style="margin-top:4px">글자가 깨져서 합계로 계산한 금액: '+info.repaired.map(esc).join(', ')+' (명세서와 한 번 확인해 주세요)</div>':'')+'</div>';
     const have=ensureYear(S.year)[S.view].tx.filter(x=>x.t==='in'||x.t==='ded').length;
     if(have) h+='<p class="sub" style="color:var(--over)">'+S.view+'월에 이미 수입·공제가 '+have+'건 있어요. 등록하면 같은 항목이 두 번 들어가니, 필요하면 먼저 지우세요.</p>';
@@ -560,15 +566,23 @@ function phHTML(){
   if(p.thumb) h+='<img src="'+p.thumb+'" alt="찍은 사진" style="max-width:100%;max-height:140px;border-radius:8px;border:1px solid var(--rule);display:block;margin:6px 0">';
   if(p.mode==='ocr'&&p.text&&p.text.trim()&&p.rows.length) h+='<details style="margin:4px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button></details>';
   if(!p.rows.length){
-    h+='<p class="empty" style="font-size:20px">읽을 수 있는 내역이 없었어요.<br>사진을 더 가깝고 밝게 찍어 보세요.</p>';
+    if(p.blurry) h+='<div class="card" style="padding:10px 12px;border-color:var(--over)"><b>사진이 너무 흐려서 읽지 못했어요</b><div class="sub" style="margin-top:4px">모니터나 TV 화면을 폰으로 직접 찍으면 화면에 줄무늬가 생겨서 글자가 뭉개져요. 아래 방법을 써 보세요.<br>① <b>화면을 캡처(스크린샷)</b>해서 <b>+ → 앨범·캡처에서 입력</b>으로 고르기<br>② PC 화면이면 캡처한 그림을 카카오톡 "나와의 채팅"이나 드라이브로 폰에 보내서 앨범에서 고르기<br>③ 꼭 찍어야 하면 화면을 조금 어둡게 하고, 멀리서 확대해서(줌) 찍기</div></div>';
+    else h+='<p class="empty" style="font-size:20px">읽을 수 있는 내역이 없었어요.<br>사진을 더 가깝고 밝게 찍어 보세요.</p>';
     if(p.text&&p.text.trim()) h+='<details open style="margin:6px 0"><summary class="link">읽은 글자 보기</summary><pre style="white-space:pre-wrap;font-size:12.5px;background:var(--paper2);padding:8px;border-radius:8px;max-height:30vh;overflow:auto">'+esc(p.text.trim())+'</pre></details><button type="button" class="btn sm" data-phpaste>이 글자로 붙여넣어 입력</button>';
   }
-  p.rows.forEach((r,i)=>{
-    h+='<div class="pp" data-pi="'+i+'"><input type="checkbox" class="ph-on"'+(r.on?' checked':'')+' aria-label="등록"><div class="row-flex"><input class="inp ph-d" style="width:62px;min-height:40px;padding:4px 8px" inputmode="numeric" value="'+r.d+'" aria-label="일"><input class="inp ph-n" style="min-height:40px;padding:4px 8px" value="'+esc(r.n)+'" aria-label="내용"></div>'+
+  const rowHTML=(r,i)=>'<div class="pp" data-pi="'+i+'"><input type="checkbox" class="ph-on"'+(r.on?' checked':'')+' aria-label="등록"><div class="row-flex"><input class="inp ph-d" style="width:62px;min-height:40px;padding:4px 8px" inputmode="numeric" value="'+r.d+'" aria-label="일"><input class="inp ph-n" style="min-height:40px;padding:4px 8px" value="'+esc(r.n)+'" aria-label="내용"></div>'+
       '<input class="inp ph-a num" style="width:108px;min-height:40px;padding:4px 8px;text-align:right" inputmode="numeric" value="'+esc(r.a)+'" aria-label="금액"><select class="ph-k" aria-label="분류">'+opts(r.k)+'</select></div>';
-  });
+  if(isSlip){
+    [['in','급여내역 (수입)'],['tax','세금내역'],['ded','공제내역']].forEach(g=>{
+      const idx=[];p.rows.forEach((r,i)=>{if(rowGroup(r)===g[0]) idx.push(i)});
+      if(!idx.length) return;
+      h+='<div class="day" style="margin-top:10px"><b>'+g[1]+'</b><span>'+idx.length+'건 · '+won(idx.reduce((s2,i)=>s2+(p.rows[i].on?num(p.rows[i].a):0),0))+'원</span></div>';
+      idx.forEach(i=>{h+=rowHTML(p.rows[i],i)});
+    });
+    p.rows.forEach((r,i)=>{if(rowGroup(r)==='out') h+=rowHTML(r,i)});
+  }else p.rows.forEach((r,i)=>{h+=rowHTML(r,i)});
   const n=p.rows.filter(r=>r.on&&num(r.a)).length;
-  h+='<div class="foot"><button type="button" class="btn soft" data-close>닫기</button><button type="button" class="btn fill" data-phsave'+(n?'':' disabled')+'>'+n+'건 등록</button></div>';
+  h+='<div class="foot"><button type="button" class="btn soft" data-close>닫기</button><button type="button" class="btn fill" data-phsave'+(n?'':' disabled')+'>'+n+'건'+(isSlip?' 한 번에':'')+' 등록</button></div>';
   return h;
 }
 function phSave(){
@@ -580,7 +594,10 @@ function phSave(){
     ensureYear(S.year)[mo].tx.push({id:newId(),d:Math.min(r.d||0,daysIn(S.year,mo)),t:ty,c:c,n:r.n.trim(),a:num(r.a),m:'사진으로 입력'});touched[mo]=1;
   });
   Object.keys(touched).forEach(m=>saveMonth(S.year,Number(m)));
-  layerClose();render(true);toast(rows.length+'건을 등록했어요',()=>restore(s));
+  const info=p.info;layerClose();render(true);
+  let msg=rows.length+'건을 등록했어요';
+  if(info&&info.slip&&info.tot.net){const net=monthStats(S.year,S.view).net;msg+=net===info.tot.net?' · '+S.view+'월 실수령액 '+won(net)+'원 (명세서와 같아요 ✔)':' · '+S.view+'월 실수령액 '+won(net)+'원 (명세서 '+won(info.tot.net)+'원과 달라요)'}
+  toast(msg,()=>restore(s));
 }
 
 /* ───── 예산 수정 시트 / 근거 보기 시트 / 사용자 시트 ───── */
@@ -907,6 +924,7 @@ document.addEventListener('change',e=>{
     const row=t.closest&&t.closest('.pp');if(!row) return;
     const r=UI.PH.rows[Number(row.dataset.pi)];if(!r) return;
     if(t.classList.contains('ph-on')){r.on=t.checked;sheetRender(phHTML())}
+    else if(t.classList.contains('ph-a')&&UI.PH.info&&UI.PH.info.slip){sheetRender(phHTML())}
     else if(t.classList.contains('ph-k')) r.k=t.value;
     return;
   }

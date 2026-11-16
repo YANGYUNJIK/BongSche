@@ -50,8 +50,26 @@ const Ocr={
     for(let i=0;i<w*h;i++) if(mask[i]) gray[i]=255;
     return gray;
   },
+  /* 모니터를 카메라로 찍으면 생기는 가로·세로 줄무늬(모아레)를 줄여요.
+     줄마다(그리고 칸마다) 바탕 밝기가 달라서 생기는 무늬라, 줄마다 바탕 밝기를 같게 맞춰요. */
+  removeBanding(gray,w,h){
+    const norm=(count,len,idx)=>{
+      for(let a=0;a<count;a++){
+        const hist=new Uint32Array(256);
+        for(let b=0;b<len;b++) hist[gray[idx(a,b)]]++;
+        let acc=0,bg=255;const target=len*0.75;
+        for(let v=0;v<256;v++){acc+=hist[v];if(acc>=target){bg=v;break}}
+        if(bg<30) continue;
+        const sc=255/bg;
+        for(let b=0;b<len;b++){const i=idx(a,b);gray[i]=Math.min(255,Math.round(gray[i]*sc))}
+      }
+    };
+    norm(h,w,(y,x)=>y*w+x);       // 줄(가로) 기준
+    norm(w,h,(x,y)=>y*w+x);       // 칸(세로) 기준
+    return gray;
+  },
   /* 사진을 읽기 좋게: 작은 사진은 2배로 키우고, 크면 줄이고(최대 1800~2000px), 흑백으로 바꾸고, 밝기 차이를 넓히고, 표의 선을 지워요 */
-  prep(file,vi){
+  prep(file,vi,band){
     vi=vi||0;
     return new Promise((resolve,reject)=>{
       const fr=new FileReader();
@@ -63,15 +81,15 @@ const Ocr={
           const big=Math.max(img.width,img.height),k=big<1400?Math.min([2,2.5,1.75,1.5][vi]||2,2400/big):Math.min(1,([1800,2200,1400,1100][vi]||1800)/big);
           const c=document.createElement('canvas');c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);
           const g=c.getContext('2d');g.drawImage(img,0,0,c.width,c.height);
-          const im=g.getImageData(0,0,c.width,c.height),d=im.data,hist=new Array(256).fill(0);
-          for(let i=0;i<d.length;i+=4){const v=Math.round(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114);d[i]=d[i+1]=d[i+2]=v;hist[v]++}
-          const n=c.width*c.height;let lo=0,hi=255,acc=0;
+          const im=g.getImageData(0,0,c.width,c.height),d=im.data,n=c.width*c.height,gray=new Uint8Array(n),hist=new Array(256).fill(0);
+          for(let i=0,j=0;i<d.length;i+=4,j++) gray[j]=Math.round(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114);
+          if(band) this.removeBanding(gray,c.width,c.height);                 // 모니터 줄무늬(모아레)가 의심될 때
+          for(let j=0;j<n;j++) hist[gray[j]]++;
+          let lo=0,hi=255,acc=0;
           for(let v=0;v<256;v++){acc+=hist[v];if(acc>=n*0.02){lo=v;break}}
           acc=0;for(let v=255;v>=0;v--){acc+=hist[v];if(acc>=n*0.02){hi=v;break}}
-          if(hi-lo>30){const sc=255/(hi-lo);for(let i=0;i<d.length;i+=4){const v=Math.max(0,Math.min(255,Math.round((d[i]-lo)*sc)));d[i]=d[i+1]=d[i+2]=v}}
-          const gray=new Uint8Array(c.width*c.height);
-          for(let i=0,j=0;i<d.length;i+=4,j++) gray[j]=d[i];
-          this.removeLines(gray,c.width,c.height,Math.max(40,Math.min(120,Math.round(Math.max(c.width,c.height)*0.045))));
+          if(hi-lo>30){const sc=255/(hi-lo);for(let j=0;j<n;j++) gray[j]=Math.max(0,Math.min(255,Math.round((gray[j]-lo)*sc)))}
+          if(!band) this.removeLines(gray,c.width,c.height,Math.max(40,Math.min(120,Math.round(Math.max(c.width,c.height)*0.045))));   // 줄무늬를 지운 사진에는 선 지우기를 하지 않아요(오히려 망가져요)
           for(let i=0,j=0;i<d.length;i+=4,j++){d[i]=d[i+1]=d[i+2]=gray[j]}
           g.putImageData(im,0,0);
           // 화면에 보여 줄 작은 사진
@@ -84,27 +102,36 @@ const Ocr={
       fr.readAsDataURL(file);
     });
   },
-  async readOnce(file,vi){
-    const p=await this.prep(file,vi),w=await this.getWorker();
+  async readOnce(file,vi,band){
+    const p=await this.prep(file,vi,band),w=await this.getWorker();
     const r=await w.recognize(p.canvas);
     clearTimeout(this._idle);
     this._idle=setTimeout(()=>{if(Ocr._worker){Ocr._worker.terminate();Ocr._worker=null}},90000);   // 안 쓰면 메모리 반납
-    return {text:r.data.text||'',thumb:p.thumb};
+    return {text:r.data.text||'',thumb:p.thumb,conf:typeof r.data.confidence==='number'?r.data.confidence:90};
   },
-  /* 읽고 해석해요. 영수증은 한 번, 월급 명세서처럼 합계를 맞춰 볼 수 있는 사진은 합계가 안 맞으면 배율을 바꿔 최대 4번 읽어요 */
+  /* 읽고 해석해요.
+     - 영수증 등: 잘 읽히면 한 번. 신뢰도가 낮으면 모니터 줄무늬를 줄여서 한 번 더.
+     - 월급 명세서(합계를 맞춰 볼 수 있는 사진): 합계가 안 맞으면 확대 배율(과 줄무늬 제거)을 바꿔 최대 4번.
+     - 끝까지 너무 흐리면 엉뚱한 내역을 만들지 않고 "읽지 못했어요"로 알려요. */
   async readAndParse(file,today,cats,progress){
-    let best=null;
+    let best=null,band=false;
+    const score=x=>{const inf=x.items.info;return (inf&&inf.slip?((x.items.length>=3?0:100)+inf.warns.length):50)+(100-x.conf)/10};
     for(let vi=0;vi<4;vi++){
-      const r=await this.readOnce(file,vi);
+      const r=await this.readOnce(file,vi,band);
+      const conf=(r.conf==null)?90:r.conf;
       const items=this.parse(r.text,today,cats),info=items.info;
-      const cand={text:r.text,thumb:r.thumb,items:items,tries:vi+1};
-      if(!info||!info.slip) return cand;
-      if(info.ok) return cand;
-      const score=x=>(x.items.length>=3?0:100)+(x.items.info?x.items.info.warns.length:5);
+      const cand={text:r.text,thumb:r.thumb,items:items,conf:conf,tries:vi+1,band:band};
+      if(info&&info.slip&&info.ok) return cand;
+      const slip=!!(info&&info.slip);
+      if(!slip&&conf>=55) return cand;
+      if(vi===0&&conf<55) band=true;                 // 줄무늬(모아레)가 의심되면 다음부터 줄무늬 제거를 켜요
       if(!best||score(cand)<score(best)) best=cand;
-      if(progress&&vi<3) progress('합계가 안 맞아서 다시 읽는 중이에요 ('+(vi+2)+'/4)');
+      if(!slip&&vi>=1) break;                        // 영수증은 두 번까지만
+      if(progress&&vi<3) progress((slip?'합계가 안 맞아서':'잘 안 읽혀서')+' 다시 읽는 중이에요 ('+(vi+2)+'/'+(slip?4:2)+')');
     }
-    best.tries=4;
+    best.tries=best.items.info&&best.items.info.slip?4:2;
+    const inf=best.items.info;
+    if(best.conf<45&&!(inf&&inf.slip&&best.items.length>=3)){best.items=[];best.blurry=true}   // 너무 흐려서 읽은 글자가 의미 없어요
     return best;
   },
 
@@ -256,7 +283,10 @@ const Ocr={
   },
   isSlip(text){
     const hits=[/급[여며]\s*(?:내역|총액|명세)/,/공제\s*(?:내역|총액)/,/세금\s*(?:내역|총액)/,/실\s*수\s*령/,/본\s*봉/].filter(re=>re.test(text)).length;
-    return hits>=2;
+    if(hits>=2) return true;
+    const names={};   // 제목이 깨져도 표준 항목 이름이 4개 이상 보이면 명세서로 봐요
+    text.split(/\s+/).forEach(t=>{const h=t.replace(/[^가-힣A-Za-z]/g,'').length>=3?this.slipName(t):null;if(h) names[h.name]=1});
+    return Object.keys(names).length>=4;
   },
   /* 읽은 이름을 표준 항목 이름으로 바로잡아요 (예: 노민장기요양보험 → 노인장기요양보험) */
   slipName(raw){
@@ -264,7 +294,7 @@ const Ocr={
     if(base.length<2) return null;
     let best=null,bd=99;
     [['in',this.SLIP_IN],['ded',this.SLIP_DED]].forEach(g=>g[1].forEach(nm=>{
-      const d=this.lev(base,nm),lim=Math.max(1,Math.floor(nm.length/4));
+      const d=this.lev(base,nm),lim=Math.max(1,Math.round(nm.length/3));
       if(d<=lim&&d<bd){bd=d;best={kind:g[0],name:nm}}
     }));
     return best;
@@ -277,9 +307,9 @@ const Ocr={
     return kind==='in'?(list.indexOf('추가 수입')>=0?'추가 수입':null):(list.indexOf('기타 공제')>=0?'기타 공제':null);
   },
   /* 자주 틀리게 읽는 글자를 감안한 낱말 찾기 (여↔며, 공↔곰, 총↔흥 등) */
-  RX_GROSS:/급[여며녀]\s*[총흥종]\s*[액엑]|급[여며녀]\s*합계/,
-  RX_TAX:/세\s*[금큼]\s*[총흥종]\s*[액엑]/,
-  RX_DED:/[공곰]\s*제\s*[총흥종]\s*[액엑]/,
+  RX_GROSS:/급[여며녀대]\s*[총흥종층]\s*[액엑]|급[여며녀대]\s*합계/,
+  RX_TAX:/세\s*[금큼]\s*[총흥종층]\s*[액엑]/,
+  RX_DED:/[공곰]\s*제\s*[총흥종층]\s*[액엑]/,
   RX_NET:/실\s*수\s*[령형]/,
   DED_ORDER:['일반기여금','건강보험','노인장기요양보험','교직원공제회비','교원연합회비'],
   IN_ORDER:['본봉','정근수당가산금','정액급식비','교직수당','교직수당가산금','시간외근무수당','교원연구비'],   // 표에서 늘 나오는 순서(이름이 깨졌을 때 추정용)
@@ -288,7 +318,7 @@ const Ocr={
     const items=[],tot={gross:0,tax:0,ded:0,net:0,netRead:false};let first=true,lastIncomeTax=0;
     const seen={};
     lines.forEach(line=>{
-      const fixed=line.replace(/[|│┃]/g,' ').replace(/(\d)\.(\d{3})(?!\d)/g,'$1,$2').replace(/(\d),\s(\d{3})/g,'$1,$2');
+      const fixed=line.replace(/[|│┃]/g,' ').replace(/(\d)\.(?=\d{3}(?!\d))/g,'$1,').replace(/(\d),\s(\d{3})/g,'$1,$2');
       const toks=fixed.split(/\s+/).filter(Boolean);
       const pairs=[];let nm=[];
       toks.forEach(t=>{
@@ -312,9 +342,10 @@ const Ocr={
         if(this.RX_TAX.test(nrm)){tot.tax=p.amt||0;return}
         if(this.RX_DED.test(nrm)){tot.ded=p.amt||0;return}
         if(this.RX_NET.test(nrm)){if(p.amt!==null){tot.net=p.amt;tot.netRead=true}return}
-        let hit=this.slipName(p.name),kind,name;
+        let hit=this.slipName(p.name),kind,name,unk=false;
         if(hit){kind=hit.kind;name=hit.name}
         else{
+          unk=true;
           kind=(idx===0)?'in':'ded';
           if(kind==='in') name=first?'본봉':(this.IN_ORDER.find(x=>!seen[x])||(p.name.replace(/[^가-힣A-Za-z0-9()]/g,'').slice(0,14)||'읽지 못함'));
           else if(lastIncomeTax&&Math.abs(p.amt-Math.floor(lastIncomeTax/100)*10)<=20&&!seen['지방소득세']) name='지방소득세';        // 지방소득세는 소득세의 10%
@@ -329,9 +360,14 @@ const Ocr={
         }
         first=false;seen[name]=true;
         if(name==='소득세'&&p.amt!==null) lastIncomeTax=p.amt;
-        items.push({date:null,n:name,a:p.amt===null?null:Math.abs(p.amt),garb:p.garb||'',type:kind==='in'?'in':'ded',c:this.mapSlipCat(kind,name,cats)});
+        items.push({date:null,n:name,a:p.amt===null?null:Math.abs(p.amt),garb:p.garb||'',unk:unk,type:kind==='in'?'in':'ded',grp:kind==='in'?'in':(/소득세/.test(name)?'tax':'ded'),c:this.mapSlipCat(kind,name,cats)});
       });
     });
+    // '실수령액' 글자가 깨져서 항목처럼 읽힌 줄이면(이름을 모르고 금액이 급여총액−세금·공제와 같음) 실수령액으로 봐요
+    if(tot.gross&&(tot.tax||tot.ded)){
+      const net=tot.gross-tot.tax-tot.ded,k=items.findIndex(i=>i.unk&&(i.a===net||(i.a===null&&i.garb&&this.compat(i.garb,net))));
+      if(k>=0){items.splice(k,1);tot.net=net;tot.netRead=true}
+    }
     // 숫자가 깨져서 못 읽은 금액은 합계에서 빼서 복구해요 (보이는 숫자와 맞을 때만)
     const repaired=[];
     ['in','ded'].forEach(kind=>{

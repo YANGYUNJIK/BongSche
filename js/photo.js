@@ -103,7 +103,7 @@ const Photo={
       if(window.__PREVIEW__){const img=await this.resize(file);return {mode:'mock',thumb:img.dataUrl,items:this.mockItems(today),text:'',note:''}}
       throw new Error(e&&e.message?e.message:'사진을 읽지 못했어요');
     }
-    return {mode:'ocr',thumb:r.thumb,text:r.text,items:r.items,info:r.items.info||null,tries:r.tries,note:note||''};
+    return {mode:'ocr',thumb:r.thumb,text:r.text,items:r.items,info:r.items.info||null,tries:r.tries,blurry:!!r.blurry,conf:r.conf,note:note||''};
   },
   async analyzeAI(file,today){
     const img=await this.resize(file),key=this.getKey(),cats=this.catNames();
